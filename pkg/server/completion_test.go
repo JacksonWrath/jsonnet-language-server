@@ -692,6 +692,44 @@ func TestCompletion(t *testing.T) {
 				},
 			},
 		},
+		{
+			name:            "completion in function arguments",
+			filename:        "testdata/goto-functions.libsonnet",
+			replaceString:   "test: myfunc(arg1, arg2)",
+			replaceByString: "test: myfunc(arg1, self.",
+			expected: protocol.CompletionList{
+				IsIncomplete: false,
+				Items: []protocol.CompletionItem{
+					{
+						Label:      "a",
+						Kind:       protocol.FieldCompletion,
+						Detail:     "self.a",
+						InsertText: "a",
+						LabelDetails: protocol.CompletionItemLabelDetails{
+							Description: "variable",
+						},
+					},
+					{
+						Label:      "b",
+						Kind:       protocol.FieldCompletion,
+						Detail:     "self.b",
+						InsertText: "b",
+						LabelDetails: protocol.CompletionItemLabelDetails{
+							Description: "variable",
+						},
+					},
+					{
+						Label:      "c",
+						Kind:       protocol.FieldCompletion,
+						Detail:     "self.c",
+						InsertText: "c",
+						LabelDetails: protocol.CompletionItemLabelDetails{
+							Description: "string",
+						},
+					},
+				},
+			},
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
