@@ -75,6 +75,8 @@ func (p *Processor) FindRangesFromIndexList(stack *nodestack.NodeStack, indexLis
 		case *ast.Function:
 			// If the function's body is an object, it means we can look for indexes within the function
 			foundDesugaredObjects = append(foundDesugaredObjects, p.findChildDesugaredObjects(bodyNode.Body)...)
+		case *ast.Binary:
+			foundDesugaredObjects = append(foundDesugaredObjects, p.resolveBinaryObjectIntoDesugaredObjects(bodyNode)...)
 		default:
 			return nil, fmt.Errorf("unexpected node type when finding bind for '%s': %s", start, reflect.TypeOf(bind.Body))
 		}
@@ -230,6 +232,43 @@ func (p *Processor) findChildDesugaredObjects(node ast.Node) []*ast.DesugaredObj
 		res = append(res, p.findChildDesugaredObjects(node.Left)...)
 		res = append(res, p.findChildDesugaredObjects(node.Right)...)
 		return res
+	}
+	return nil
+}
+
+func (p *Processor) resolveBinaryObjectIntoDesugaredObjects(node ast.Node) []*ast.DesugaredObject {
+	switch node := node.(type) {
+	case *ast.Binary:
+		var res []*ast.DesugaredObject
+		// extractObjectRangesFromDesugaredObjs() processes this list first-in-first-out, so in the case of
+		// Binarys that have duplicate fields, the fields on the right side should be considered for a match first.
+		res = append(res, p.resolveBinaryObjectIntoDesugaredObjects(node.Right)...)
+		res = append(res, p.resolveBinaryObjectIntoDesugaredObjects(node.Left)...)
+		return res
+	case *ast.DesugaredObject:
+		return []*ast.DesugaredObject{node}
+	case *ast.Index:
+		targetObjects := p.resolveBinaryObjectIntoDesugaredObjects(node.Target)
+		var index string
+		switch indexNode := node.Index.(type) {
+		case *ast.LiteralString:
+			index = indexNode.Value
+		}
+		fields := findObjectFieldsInObjects(targetObjects, index, false)
+		if len(fields) == 1 {
+			return p.resolveBinaryObjectIntoDesugaredObjects(fields[0].Body)
+		}
+	case *ast.Var:
+		varReference, err := p.FindVarReference(node)
+		if err != nil {
+			log.Error("error finding var reference: %w", err)
+		}
+		return p.resolveBinaryObjectIntoDesugaredObjects(varReference)
+	case *ast.Import:
+		filename := node.File.Value
+		return p.FindTopLevelObjectsInFile(filename, string(node.Loc().File.DiagnosticFileName))
+	default:
+		log.Infof("skipped child node of type %T: %+v", node, node)
 	}
 	return nil
 }
