@@ -3,6 +3,7 @@ package processing
 import (
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 
 	"github.com/google/go-jsonnet/ast"
@@ -76,7 +77,7 @@ func (p *Processor) FindRangesFromIndexList(stack *nodestack.NodeStack, indexLis
 			// If the function's body is an object, it means we can look for indexes within the function
 			foundDesugaredObjects = append(foundDesugaredObjects, p.findChildDesugaredObjects(bodyNode.Body)...)
 		case *ast.Binary:
-			foundDesugaredObjects = append(foundDesugaredObjects, p.resolveBinaryObjectIntoDesugaredObjects(bodyNode)...)
+			foundDesugaredObjects = append(foundDesugaredObjects, p.resolveNodeIntoDesugaredObjects(bodyNode)...)
 		default:
 			return nil, fmt.Errorf("unexpected node type when finding bind for '%s': %s", start, reflect.TypeOf(bind.Body))
 		}
@@ -236,41 +237,82 @@ func (p *Processor) findChildDesugaredObjects(node ast.Node) []*ast.DesugaredObj
 	return nil
 }
 
-func (p *Processor) resolveBinaryObjectIntoDesugaredObjects(node ast.Node) []*ast.DesugaredObject {
+func (p *Processor) resolveNodeIntoDesugaredObjects(node ast.Node) []*ast.DesugaredObject {
 	switch node := node.(type) {
 	case *ast.Binary:
 		var res []*ast.DesugaredObject
-		// extractObjectRangesFromDesugaredObjs() processes this list first-in-first-out, so in the case of
-		// Binarys that have duplicate fields, the fields on the right side should be considered for a match first.
-		res = append(res, p.resolveBinaryObjectIntoDesugaredObjects(node.Right)...)
-		res = append(res, p.resolveBinaryObjectIntoDesugaredObjects(node.Left)...)
+		// extractObjectRangesFromDesugaredObjs() processes objects first-in-first-out, so in the case of Binary nodes
+		// that have field conflicts, the fields on the right side should be considered for a match first.
+		res = append(res, p.resolveNodeIntoDesugaredObjects(node.Right)...)
+		res = append(res, p.resolveNodeIntoDesugaredObjects(node.Left)...)
 		return res
 	case *ast.DesugaredObject:
 		return []*ast.DesugaredObject{node}
 	case *ast.Index:
-		targetObjects := p.resolveBinaryObjectIntoDesugaredObjects(node.Target)
-		var index string
-		switch indexNode := node.Index.(type) {
-		case *ast.LiteralString:
-			index = indexNode.Value
-		}
-		fields := findObjectFieldsInObjects(targetObjects, index, false)
-		if len(fields) == 1 {
-			return p.resolveBinaryObjectIntoDesugaredObjects(fields[0].Body)
-		}
+		resolvedNode := p.resolveIndexNode(node)
+		return p.resolveNodeIntoDesugaredObjects(resolvedNode)
 	case *ast.Var:
 		varReference, err := p.FindVarReference(node)
 		if err != nil {
 			log.Error("error finding var reference: %w", err)
 		}
-		return p.resolveBinaryObjectIntoDesugaredObjects(varReference)
+		return p.resolveNodeIntoDesugaredObjects(varReference)
 	case *ast.Import:
 		filename := node.File.Value
 		return p.FindTopLevelObjectsInFile(filename, string(node.Loc().File.DiagnosticFileName))
 	default:
-		log.Infof("skipped child node of type %T: %+v", node, node)
+		log.Warnf("unknown node type found while resolving node %T: %+v", node, node)
 	}
 	return nil
+}
+
+func (p *Processor) resolveIndexNode(node *ast.Index) ast.Node {
+	if numberNode, ok := node.Index.(*ast.LiteralNumber); ok {
+		arrayIndex, err := strconv.Atoi(numberNode.OriginalString)
+		if err != nil {
+			log.Errorf("got a LiteralNumber that wasn't a number: %v", numberNode.OriginalString)
+		}
+		switch targetNode := node.Target.(type) {
+		case *ast.Var:
+			target, err := p.FindVarReference(targetNode)
+			if err != nil {
+				log.Error("error finding var reference: %w", err)
+				return nil
+			}
+			if array, ok := target.(*ast.Array); ok {
+				return array.Elements[arrayIndex].Expr
+			} else {
+				log.Warnf("Unknown node target type '%T' for numbered-index: %+v", target, target)
+			}
+		}
+	} else {
+		index := p.resolveIndexValue(node.Index)
+		targetObjects := p.resolveNodeIntoDesugaredObjects(node.Target)
+		fields := findObjectFieldsInObjects(targetObjects, index, false)
+		if len(fields) == 1 {
+			return fields[0].Body
+		}
+	}
+	return nil
+}
+
+func (p *Processor) resolveIndexValue(node ast.Node) string {
+	switch node := node.(type) {
+	case *ast.Binary:
+		return p.resolveIndexValue(node.Left) + p.resolveIndexValue(node.Right)
+	case *ast.Index:
+		resolvedNode := p.resolveIndexNode(node)
+		return p.resolveIndexValue(resolvedNode)
+	case *ast.LiteralString:
+		return node.Value
+	case *ast.Var:
+		varReference, err := p.FindVarReference(node)
+		if err != nil {
+			log.Error("error finding var reference: %w", err)
+		}
+		return p.resolveIndexValue(varReference)
+	}
+	return ""
 }
 
 // FindVarReference finds the object that the variable is referencing

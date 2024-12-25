@@ -692,6 +692,44 @@ func TestCompletion(t *testing.T) {
 				},
 			},
 		},
+		{
+			name:            "autocomplete binary objects with nested indexes and correct field conflicts",
+			filename:        "testdata/binary-autocomplete.jsonnet",
+			replaceString:   "field: binary",
+			replaceByString: "field: binary.",
+			expected: protocol.CompletionList{
+				IsIncomplete: false,
+				Items: []protocol.CompletionItem{
+					{
+						Label:      "a",
+						Kind:       protocol.FieldCompletion,
+						Detail:     "binary.a",
+						InsertText: "a",
+						LabelDetails: protocol.CompletionItemLabelDetails{
+							Description: "string",
+						},
+					},
+					{
+						Label:      "b",
+						Kind:       protocol.FieldCompletion,
+						Detail:     "binary.b",
+						InsertText: "b",
+						LabelDetails: protocol.CompletionItemLabelDetails{
+							Description: "string",
+						},
+					},
+					{
+						Label:      "c",
+						Kind:       protocol.FieldCompletion,
+						Detail:     "binary.c",
+						InsertText: "c",
+						LabelDetails: protocol.CompletionItemLabelDetails{
+							Description: "string",
+						},
+					},
+				},
+			},
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
